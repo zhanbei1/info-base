@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from langserve import add_routes
 
 from infobase.chain import get_chain
+from infobase.configs import DEFAULT_BIND_HOST, PORT
 
 app = FastAPI()
 
@@ -14,4 +15,12 @@ add_routes(
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    uvicorn.run(app, host=DEFAULT_BIND_HOST, port=PORT)
+
+
+class Calculator:
+    def add(self, a: int, b: int) -> int:
+        return a + b
+
+    def subtract(self, a: int, b: int) -> int:
+        return a - b
