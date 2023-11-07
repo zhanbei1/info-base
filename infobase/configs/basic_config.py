@@ -23,7 +23,7 @@ if not os.path.exists(LOG_PATH):
 # 支持文件夹名称或者文件名称正则表达
 IGNORE_PATH = ["*.class", "*.ear", "*.jar", "*.jws", "*.ser", "*.war", ".classpath", ".cosine", ".eclipse", ".git",
                ".gradle", ".idea", ".mvn", ".project", ".settings", ".vscode", "bin", "doc", "build", "logs", "out",
-               "target", ".*", "LICENSE", "test", "docs"]
+               "target", ".*", "LICENSE", "test"]
 
 # 不用语言，通过tree-sitter解析出来的语法树之后，哪些是需要保留的类型：
 SUPPORT_LANGUAGE_DEFINITION_TYPE = {

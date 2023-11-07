@@ -15,25 +15,6 @@ Analyze the text content of the code for analysis. Analyze by class, function, e
 Summarize the main functions of this code：        
 {Input}
 '''
-LLM_WHOLE_FILE_SUMMARY_OUTPUT = '''
-{
-    "description": "The Calculator class is mainly a class that processes data and provides two functions for integer data operations. One is to add two integers and the other is to subtract two integers",
-    "name":"Calculator",
-    "type":"class",
-    "input_parameter": null,
-    "return_obj": null,
-    "possible_exception": null,
-    "content_description": [{
-            "name": "Calculator.add",
-            "type":"function",
-            "description": "It is to add two integers and return an int type data",
-            "input_parameter": "a:int, b:int",
-            "return_obj": "int",
-            "possible_exception": ["",""],
-        }
-    ]
-}
-'''
 
 HYPOTHETICAL_QUESTIONS_PROMPT_TEMPLATE = """
 Analyzing and guessing around known information can describe three hypothetical questions that can be answered and provide answers to them：
@@ -99,17 +80,21 @@ DIR_SUMMARY_OUTPUT = """
 }
 """
 
+# If necessary, code examples can be provided.
 LLM_QUERY_PROMPT_TEMPLATE = '''
 The following information is known : 
 {context}
 As information administrator robot, please answer:
 {query}
+
 '''
 
 LLM_LANGUAGE_TRANSLATOR_PROMPT_TEMPLATE = '''
-Translate the following content into {language}:
-"{content}"
+Translate the following content into {language}，If it is already all in {language}, there is no need to translate and you can simply return it:
+{content}
 '''
+
+# If necessary, code examples can be provided.
 LLM_MULTI_QUERY_PROMPT_TEMPLATE = """
 I already know the following questions and answers：
 {multi_query_answer}
@@ -119,19 +104,13 @@ As an intelligent robot, please organize known information and answer the follow
 
 MULTI_QUERY_PROMPT_TEMPLATE = """
 Provide three different latitude questions based on the following known information to assist in answering this question.
-Return to me in array format
-Original question: 
 {question}
 
  """
-MULTI_QUERY_OUTPUT = """
-[{
-    "need_code": true,
-    "question": "Here is a demo example of a problem that requires code, not a real problem",
-  },
-  {
-    "need_code": false,
-    "question": "This is an example of a problem that does not require code, not a real code example",
-  }
-]
+
+NEED_ORIGIN_CODE_PROMPT_TEMPLATE = """
+Now there is a problem where you can find the corresponding function description based on the problem, but there is no source code for the function.
+As an intelligent robot, do you need source code to answer this question:
+{question}
+No need to analyze the process, just answer yes or no
 """

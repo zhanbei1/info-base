@@ -20,7 +20,7 @@ from typing import List, Any
 import ujson
 from langchain.chains import LLMChain
 from langchain.chat_models import AzureChatOpenAI
-from langchain.embeddings import HuggingFaceEmbeddings, OpenAIEmbeddings
+from langchain.embeddings import HuggingFaceEmbeddings
 from langchain.prompts import PromptTemplate
 from langchain.retrievers import MultiVectorRetriever
 from langchain.schema import Document
@@ -33,9 +33,9 @@ from tree_sitter import Language, Parser
 from infobase.configs import IGNORE_PATH, logger, CODE_TYPE_FILE_SUFFIX_MAPPING, SUPPORT_LANGUAGE_DEFINITION_TYPE
 from infobase.prompt_template import LLM_WHOLE_FILE_SUMMARY_PROMPT_TEMPLATE, \
     LLM_DIR_SUMMARY_PROMPT_TEMPLATE, LLM_QUERY_PROMPT_TEMPLATE, LLM_LANGUAGE_TRANSLATOR_PROMPT_TEMPLATE, \
-    LLM_FUNCTION_SUMMARY_PROMPT_TEMPLATE, LLM_FUNCTION_SUMMARY_OUTPUT, LLM_WHOLE_FILE_SUMMARY_OUTPUT, \
-    DIR_SUMMARY_OUTPUT, MULTI_QUERY_PROMPT_TEMPLATE, MULTI_QUERY_OUTPUT, LLM_MULTI_QUERY_PROMPT_TEMPLATE, \
-    HYPOTHETICAL_QUESTIONS_PROMPT_TEMPLATE
+    LLM_FUNCTION_SUMMARY_PROMPT_TEMPLATE, LLM_FUNCTION_SUMMARY_OUTPUT, \
+    DIR_SUMMARY_OUTPUT, MULTI_QUERY_PROMPT_TEMPLATE, LLM_MULTI_QUERY_PROMPT_TEMPLATE, \
+    HYPOTHETICAL_QUESTIONS_PROMPT_TEMPLATE, NEED_ORIGIN_CODE_PROMPT_TEMPLATE
 
 
 class PathType(Enum):
@@ -314,13 +314,23 @@ class ProjectCodeDescTree:
 
         try:
             llm_chain = LLMChain(llm=self.llm35, prompt=prompt)
-            llm_response = llm_chain.predict(question=query_text, Output=MULTI_QUERY_OUTPUT)
-            llm_response = re.sub(r',\s*\n*}', '}', llm_response)
-            question_list: list[dict] = ujson.loads(llm_response)
-            return question_list
+            llm_response = llm_chain.predict(question=query_text)
+            question_list: list[str] = llm_response.split("\n")
+            split_question_list = []
+            if question_list is not None and len(question_list) > 0:
+                need_code_prompt = PromptTemplate.from_template(NEED_ORIGIN_CODE_PROMPT_TEMPLATE)
+                llm_chain = LLMChain(llm=self.llm35, prompt=need_code_prompt)
+
+                for question in question_list:
+                    need_code_result: str = llm_chain.predict(question=question)
+                    split_question_list.append({
+                        "question": question,
+                        "need_code": True if need_code_result.lower() == "yes" else False
+                    })
+            return split_question_list
         except Exception as e:
             traceback.print_exc()
-            raise e
+            return []
 
     def llm_hypothetical_questions(self, desc: Description) -> str:
         prompt = PromptTemplate.from_template(HYPOTHETICAL_QUESTIONS_PROMPT_TEMPLATE)
@@ -365,11 +375,10 @@ class ProjectCodeDescTree:
         page_content = ujson.dumps({
             "name": desc.name,
             "description": desc.description,
-            "possible_exception": desc.possible_exception
         })
         # 假设性问题回答
-        hypothetical_questions = self.llm_hypothetical_questions(desc=desc)
-        docs_list.append(Document(page_content=hypothetical_questions, metadata={id_key: id}))
+        # hypothetical_questions = self.llm_hypothetical_questions(desc=desc)
+        # docs_list.append(Document(page_content=hypothetical_questions, metadata={id_key: id}))
         docs_list.append(Document(page_content=page_content, metadata=metadata))
         try:
             self.chroma_db.add_documents(docs_list)
@@ -378,8 +387,8 @@ class ProjectCodeDescTree:
 
     def query_similarity(self, query_text: str) -> str:
         query_english = self.translator_text_language(query_text, 'english')
-        # split_query_list: list[dict] = self.llm_split_multi_query(query_english)
-        split_query_list = []
+        split_query_list: list[dict] = self.llm_split_multi_query(query_english)
+        # split_query_list = []
         answer_list = []
         split_query_list.append({
             "question": query_english,
@@ -391,7 +400,7 @@ class ProjectCodeDescTree:
             id_key="doc_id",
         )
         for query in split_query_list:
-            similar_list: list[Document] = retriever.vectorstore.similarity_search(query=query.get("question"), k=5)
+            similar_list: list[Document] = retriever.vectorstore.similarity_search(query=query.get("question"), k=8)
             # similar_content_list = self.chroma_db.similarity_search(query=query, k=10)
             prompt_template = PromptTemplate(template=LLM_QUERY_PROMPT_TEMPLATE,
                                              input_variables=["context", "query"])
@@ -417,12 +426,15 @@ class ProjectCodeDescTree:
 
             chain = LLMChain(llm=self.llm35, prompt=prompt_template)
             response = chain.predict(context=similar_content_obj, query=query)
-            answer_list.append(response)
+            answer_list.append({
+                "Question": query,
+                "Answer": response
+            })
 
         prompt_template = PromptTemplate(template=LLM_MULTI_QUERY_PROMPT_TEMPLATE,
                                          input_variables=["multi_query_answer", "question"])
         chain = LLMChain(llm=self.llm35, prompt=prompt_template)
-        response = chain.predict(multi_query_answer=answer_list, question=query_text)
+        response = chain.predict(multi_query_answer=answer_list, question=query_english)
         return response
 
     def translator_text_language(self, context: str, language: str):
@@ -449,7 +461,7 @@ if __name__ == '__main__':
     # infobase_embedding_with_multi_vector_with_v2_base_en_model：更换embedding模型，并排除docs文件夹
     # infobase_embedding_with_multi_vector_InfixNotEqualsOperator：单独验证一个文件做召回
     codeDesc = ProjectCodeDescTree(project_path="/Users/zhanbei/IdeaProjects/EvalEx/",
-                                   collection_name="infobase_embedding_with_multi_vector")
+                                   collection_name="infobase_with_docs")
     try:
         # desc = codeDesc.constructDescriptionTree("/Users/zhanbei/IdeaProjects/EvalEx")
         # print(desc.dict())
@@ -487,16 +499,56 @@ if __name__ == '__main__':
         # ISSUES
         issues = [
             """
-                What problem caused the following errors：
-                Undefined operator '.'
-                    ParseException(super=BaseException(startPosition=6, endPosition=6, tokenString=., message=Undefined operator '.'))
-                        at app//com.ezylang.evalex.parser.Tokenizer.parseOperator(Tokenizer.java:253)
-                        at app//com.ezylang.evalex.parser.Tokenizer.getNextToken(Tokenizer.java:165)
-                        at app//com.ezylang.evalex.parser.Tokenizer.parse(Tokenizer.java:84)
-                        at app//com.ezylang.evalex.Expression.getAbstractSyntaxTree(Expression.java:235)
-                        at app//com.ezylang.evalex.Expression.evaluate(Expression.java:85)
-                    ... 
-           """
+            How to restrict list of operators used in formula evaluation? 
+            Thank you for your library. How to restrict the list of operators before evaluating the formula? I only use the +, -, *, / how to disable for example the unary operators?
+           """,
+            """
+            Structure access with arbitrary key format
+            Hello, really loving this little library.
+            I'm facing the issue where my context is as follows
+            
+            {
+                "element": {
+                    "a prop": 1
+                }
+            }
+            and I wish I could write an expression such as element['a prop'] or element.'a prop'. Is there a way to achieve this?
+            """,
+
+            """
+            Fraction calculation, is that possible?
+            Hi,
+            I successfully implemented basic features of a calculator.
+            Thank you a lot for the useful library!
+            I plan to see if I can enhance my calculator with the feature like at https://www.mathpapa.com/fraction-calculator.html
+            Basically, the calculator should allow to switch between decimal and fraction mode.
+            In fraction mode, every part, which is not an integer will be kept as original or in an optimal result.
+            Examples:
+            2 / 6 should be 1 / 3
+            sqrt(4 / 2) should be sqrt(2)
+            2 / 6 + sqrt(4 / 2) should be 1 / 3 + sqrt(2)
+            Do you see any possibility for fraction calculation with this library?
+            """,
+
+            """
+            Detect whether an Expression is a simple number
+            Question: I was wondering whether there is an easy way to detect with EvalEx whether an expression is a simple number?
+            Let me describe in more details my use-case. I have two input values for expressions which get multiplied in the end.
+            For example:
+            expression1: 12+3
+            expression2: 5-3
+            
+            Hence what I do is to is to concatenate the strings (if valid): (expression1) * (expression2)
+            Note: To be on the safe side I need to add brackets around it. I also show the "resulting" expression to the user. In this case (12+3) * (5-3)
+            This bring me to the actual question. In most of the cases people insert simple numbers like
+            expression1: 8
+            expression2: 9
+            and the results looks like this: (8) * (9)
+            People wonder why these brackets are added since it would be nicer looking to have in this case 8 * 9
+            I noticed there is a isNumber(...) function. Unfortunately it is protected.
+            Is there another way to achieve what I am looking for?
+            Thanks for any advice and your library in the first place!
+            """
         ]
         for issue in issues:
             result = codeDesc.query_similarity(issue)
