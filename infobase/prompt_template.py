@@ -25,9 +25,7 @@ Analyzing and guessing around known information can describe three hypothetical 
 LLM_FUNCTION_SUMMARY_PROMPT_TEMPLATE = '''
 Analyze the text content of the code for analysis. Analyze by function
 Summarize the function name, input parameter type, output parameter type, main purpose,
-possible types and information of exceptions that may be reported and hypothetical questions.
-Based on the summary description, provide a list of possible hypothetical questions to answer, and only provide three hypothetical questions
-Possible_exception and hypothetical_questions list multiple points according to the content to form an array.
+possible types and information of exceptions that may be reported.
 Output JSON format, and if no results are analyzed for a certain latitude, it can be blank
 
 Example:
@@ -46,11 +44,10 @@ LLM_FUNCTION_SUMMARY_OUTPUT = '''
 {
     "name": "add",
     "type":"function",
-    "description": "It is to add two integers and return an int type data",
+    "description": "add(self, a: int, b: int) -> int is to add two integers and return an int type data",
     "input_parameter": "a:int, b:int",
     "return_obj": "int",
     "possible_exception": ["",""],
-    "hypothetical_questions":["", ""]
 }
 '''
 
@@ -74,9 +71,6 @@ please analyze and summarize the {path_type} based on the following known inform
 DIR_SUMMARY_OUTPUT = """
 {
 	"description": "The program is designed to convert a list of expression tokens into an abstract syntax tree. The class_declaration is responsible for processing various tokens, including structure separators, function opening and closing braces, and array open and close tokens. It also validates function parameters and checks for operator precedence. The program creates operator nodes and pushes them onto the operand stack. It checks if a given token is an operator or not and returns a boolean value.",
-	"hypothetical_questions": ["How to Calculate the Addition of Two Numbers"，
-		"How to calculate two integers"
-	]
 }
 """
 
