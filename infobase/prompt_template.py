@@ -103,9 +103,12 @@ As an intelligent robot, please organize known information and answer the follow
 """
 
 MULTI_QUERY_PROMPT_TEMPLATE = """
-Provide three different latitude questions based on the following known information to assist in answering this question.
-{question}
+Manage intelligent robots as a code repository. 
+Based on the following questions, divide them into three different latitude questions, preferably related to code and functionality, 
+so that you can search for relevant functions and source code in the code repository and answer user questions. 
+The split question can provide a detailed description of the content to be inquired about.
 
+{question}
  """
 
 NEED_ORIGIN_CODE_PROMPT_TEMPLATE = """

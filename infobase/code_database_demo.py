@@ -318,20 +318,29 @@ class ProjectCodeDescTree:
             question_list: list[str] = llm_response.split("\n")
             split_question_list = []
             if question_list is not None and len(question_list) > 0:
-                need_code_prompt = PromptTemplate.from_template(NEED_ORIGIN_CODE_PROMPT_TEMPLATE)
-                llm_chain = LLMChain(llm=self.llm35, prompt=need_code_prompt)
-
                 for question in question_list:
-                    need_code_result: str = llm_chain.predict(question=question)
+                    question = re.sub(r"^\d\.", "", question)
                     split_question_list.append({
                         "question": question,
-                        "need_code": True if need_code_result.lower() == "yes" else False
+                        "need_code": self.llm_check_need_code(question)
                     })
             return split_question_list
         except Exception as e:
             traceback.print_exc()
             return []
 
+    def llm_check_need_code(self, query_text) -> bool:
+        """
+        check if the query need code
+        :param query_text: 问题
+        :return:
+        """
+        need_code_prompt = PromptTemplate.from_template(NEED_ORIGIN_CODE_PROMPT_TEMPLATE)
+        llm_chain = LLMChain(llm=self.llm35, prompt=need_code_prompt)
+        llm_response = llm_chain.predict(question=query_text)
+        return True if llm_response.lower() == "yes" else False
+
+    # TODO： 不需要了
     def llm_hypothetical_questions(self, desc: Description) -> str:
         prompt = PromptTemplate.from_template(HYPOTHETICAL_QUESTIONS_PROMPT_TEMPLATE)
 
@@ -379,6 +388,9 @@ class ProjectCodeDescTree:
         # 假设性问题回答
         # hypothetical_questions = self.llm_hypothetical_questions(desc=desc)
         # docs_list.append(Document(page_content=hypothetical_questions, metadata={id_key: id}))
+        if page_content is None:
+            return
+
         docs_list.append(Document(page_content=page_content, metadata=metadata))
         try:
             self.chroma_db.add_documents(docs_list)
@@ -392,7 +404,7 @@ class ProjectCodeDescTree:
         answer_list = []
         split_query_list.append({
             "question": query_english,
-            "need_code": False
+            "need_code": self.llm_check_need_code(query_english)
         })
         retriever = MultiVectorRetriever(
             vectorstore=self.chroma_db,
@@ -425,9 +437,9 @@ class ProjectCodeDescTree:
                 similar_content_obj = [similar_content.page_content for similar_content in similar_list]
 
             chain = LLMChain(llm=self.llm35, prompt=prompt_template)
-            response = chain.predict(context=similar_content_obj, query=query)
+            response = chain.predict(context=similar_content_obj, query=query.get("question"))
             answer_list.append({
-                "Question": query,
+                "Question": query.get("question"),
                 "Answer": response
             })
 
@@ -447,19 +459,8 @@ class ProjectCodeDescTree:
 
 
 if __name__ == '__main__':
-    # infobase_embedding_desc_question_exception : embedding 存入markdown模式的 desc_questiong_exception
-    # 总结chunk太小，使用multiVector，不太行，特别是hypothetical question（假设性问题，做的有的重复的，回答的并不好）
-    # infobase_embedding_desc_question_exception_json : 按照json格式embedding到数据库中
-    # 以上两个都存在2、多层的目录，某个目录下没有任何一个文件，而且仅有一个文件夹，类似于 src/com/cloudwise/doop/pipeline，
-    #   很多文件夹其实是没有什么用的，但是总结之后的描述是一摸一样的。导致搜索结果出现多个一样描述的
-    # 	某个文件夹下，就一个文件夹，忽略这个文件夹的总结
-    # 	某个文件夹下，就一个文件，忽略这个文件夹的描述
-    # 	某个文件夹下，就一个，则这个文件夹就不描述了，使用这个
-    # infobase_embedding_desc_question_exception_json_without_one : 某个文件夹下，就一个，则这个文件夹就不描述了，直接用这个往上传递总结
-    # infobase_embedding_with_multi_vector: embedding 添加描述和假设性问题和恢复
-    # /Users/zhanbei/IdeaProjects/EvalEx/src/main/java/com/ezylang/evalex/functions/FunctionParameterDefinition.java
-    # infobase_embedding_with_multi_vector_with_v2_base_en_model：更换embedding模型，并排除docs文件夹
-    # infobase_embedding_with_multi_vector_InfixNotEqualsOperator：单独验证一个文件做召回
+    # infobase_with_docs: 带有docs 进行embedding的
+    # infobase_with_docs_without_params : 不带有任何出入参数询问llm ，直接进行总结即可
     codeDesc = ProjectCodeDescTree(project_path="/Users/zhanbei/IdeaProjects/EvalEx/",
                                    collection_name="infobase_with_docs")
     try:
