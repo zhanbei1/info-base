@@ -11,6 +11,7 @@
 """
 import fnmatch
 import os
+import sys
 import traceback
 import uuid
 import re
@@ -37,12 +38,14 @@ from infobase.prompt_template import LLM_WHOLE_FILE_SUMMARY_PROMPT_TEMPLATE, \
     DIR_SUMMARY_OUTPUT, MULTI_QUERY_PROMPT_TEMPLATE, LLM_MULTI_QUERY_PROMPT_TEMPLATE, \
     HYPOTHETICAL_QUESTIONS_PROMPT_TEMPLATE, NEED_ORIGIN_CODE_PROMPT_TEMPLATE
 
+os.environ["TOKENIZERS_PARALLELISM"] = "true"
+
 
 class PathType(Enum):
-    FILE = "file",
-    DIR = "dir",
-    FUNCTION = "function",
-    CLASS = "class",
+    FILE = "file"
+    DIR = "dir"
+    FUNCTION = "function"
+    CLASS = "class"
 
 
 class SupportLanguageParser:
@@ -69,7 +72,7 @@ os.environ["LANGCHAIN_PROJECT"] = "desmond_test"
 
 # 支持的语言和文件识别的后缀
 class CodeLanguageEnum(Enum):
-    JAVA = SupportLanguageParser("java"),
+    JAVA = SupportLanguageParser("java")
     PYTHON = SupportLanguageParser("python")
 
 
@@ -105,6 +108,24 @@ class ProjectCodeDescTree:
                                 embedding_function=self.embedding_model,
                                 persist_directory="/Users/zhanbei/PycharmProjects/infobase/data/chroma_db")
         self.common_text_splitter = CharacterTextSplitter.from_tiktoken_encoder(chunk_size=500, chunk_overlap=10)
+        self.passed_path_file = "/Users/zhanbei/PycharmProjects/infobase/data/pass_file_path.txt"
+        self.passed_path = self._load_passed_file_list()
+
+    def _load_passed_file_list(self):
+        """
+        加载已经处理过的文件
+        """
+        try:
+            if os.path.exists(self.passed_path_file):
+                with open(self.passed_path_file) as f:
+                    return ujson.load(f)
+        except Exception as e:
+            logger.error(f"_load_passed_file_list error , error info :{e}")
+        return []
+
+    def write_pass_file_list_to_file(self):
+        with open(self.passed_path_file, "w") as f:
+            ujson.dump(self.passed_path, f)
 
     # 构造目录描述文件树
     def constructDescriptionTree(self, path: str) -> Description | None:
@@ -113,6 +134,9 @@ class ProjectCodeDescTree:
             if fnmatch.fnmatch(path.split("/")[-1], pattern):
                 logger.info(f"忽略文件夹：{path}")
                 return None
+        # 已经处理过的文件夹，直接忽略跳过
+        if path.replace(self.project_path, "") in self.passed_path:
+            return
 
         if os.path.isdir(path):
             desc_list: list[Description] = []
@@ -125,15 +149,17 @@ class ProjectCodeDescTree:
             # 根据desc_list 总结本目录主要功能
             if desc_list is None:
                 return None
+            # 处理过的记录一下
+            self.passed_path.append(path.replace(self.project_path, ""))
             # 尽量排除过多空的文件夹，只保留一个文件夹即可
-            if len(desc_list) > 1 or (len(desc_list) == 1 and desc_list[0].type == PathType.FILE.value[0]):
+            if len(desc_list) > 1 or (len(desc_list) == 1 and desc_list[0].type == PathType.FILE.value):
                 desc: Description = self.llm_dir_summary_description(desc_list=desc_list, path_type="module")
-                desc.type = PathType.DIR.value[0]
+                desc.type = PathType.DIR.value
                 desc.path = path.replace(self.project_path, "")
                 # desc.children_desc_list = desc_list
                 self.insert_to_vector_db(desc)
                 return desc
-            elif len(desc_list) == 1 and desc_list[0].type == PathType.DIR.value[0]:
+            elif len(desc_list) == 1 and desc_list[0].type == PathType.DIR.value:
                 return desc_list[0]
 
         elif os.path.isfile(path):
@@ -141,26 +167,35 @@ class ProjectCodeDescTree:
                 # 如果是代码，进行切分
                 if path.endswith(".py"):
                     file_desc = self.split_code_file_summary_desc(path, CodeLanguageEnum.PYTHON)
-                    parser: SupportLanguageParser = CodeLanguageEnum.PYTHON.value[0]
-                    self.insert_to_vector_db(file_desc, parser.ignore_save_type)
-                    return file_desc
+                    if file_desc is not None:
+                        parser: SupportLanguageParser = CodeLanguageEnum.PYTHON.value
+                        self.insert_to_vector_db(file_desc, parser.ignore_save_type)
+                        return file_desc
+                    else:
+                        return None
                 elif path.endswith(".java"):
                     file_desc = self.split_code_file_summary_desc(path, CodeLanguageEnum.JAVA)
-                    parser: SupportLanguageParser = CodeLanguageEnum.JAVA.value[0]
-                    self.insert_to_vector_db(file_desc, parser.ignore_save_type)
-                    return file_desc
+                    if file_desc is not None:
+                        parser: SupportLanguageParser = CodeLanguageEnum.JAVA.value
+                        self.insert_to_vector_db(file_desc, parser.ignore_save_type)
+                        return file_desc
+                    else:
+                        return None
                 else:
                     with open(path) as f:
                         # 如果认为是普通文本，直接文本切分，写入向量数据库
                         texts: List[str] = self.common_text_splitter.split_text(f.read())
                         for text in texts:
-                            desc = Description(type=PathType.FILE.value[0], path=path.replace(self.project_path, ""),
+                            desc = Description(type=PathType.FILE.value, path=path.replace(self.project_path, ""),
                                                description=text)
                             self.insert_to_vector_db(desc)
                         return None
             except Exception as e:
-                print(f"{path} open error , error info is : {e}")
+                logger.error(f"{path} open error , error info is : {e}")
                 raise e
+            finally:
+                self.passed_path.append(path.replace(self.project_path, ""))
+
         print(f"{path} 内的文件已经解析完成 =================== > > > > > > > > > > >  ")
 
     # 根据文件类型切分文件内容
@@ -174,13 +209,13 @@ class ProjectCodeDescTree:
                 file_desc.code_byte_range = [0, len(context)]
             else:
                 file_desc = self._code_splitter_summary(file_path, code_type)
-            file_desc.type = PathType.FILE.value[0]
+            file_desc.type = PathType.FILE.value
             return file_desc
 
     def _code_splitter_summary(self, file_path: str, code_type: CodeLanguageEnum) -> Description:
         with open(file_path) as f:
             text = f.read()
-            language_parser: SupportLanguageParser = code_type.value[0]
+            language_parser: SupportLanguageParser = code_type.value
             tree = language_parser.parser.parse(bytes(text, encoding="utf-8"))
             if (
                     not tree.root_node.children
@@ -212,9 +247,12 @@ class ProjectCodeDescTree:
                         desc_chunks = self._chunk_node(children, file_path, code_parser)
                         if desc_chunks is not None:
                             new_chunks_desc.append(desc_chunks)
-                    if new_chunks_desc is not None:
+                    if new_chunks_desc is not None and len(new_chunks_desc) > 0:
                         desc: Description = self.llm_dir_summary_description(new_chunks_desc, node.type)
                         desc.children_desc_list = new_chunks_desc
+            if desc is None:
+                return None
+
             desc.code_byte_range = [node.start_byte, node.end_byte]
             desc.type = node.type
             desc.path = file_path.replace(self.project_path, "")
@@ -245,7 +283,7 @@ class ProjectCodeDescTree:
             desc.path = file_name
             # desc.children_desc_list = children_desc_list
         except Exception as e:
-            print(e)
+            logger.error(f"llm_function_summary_description error, response:{response} , error info: {e}")
             desc = Description(description=response)
         return desc
 
@@ -271,7 +309,7 @@ class ProjectCodeDescTree:
             desc: Description = Description.parse_obj(result_dict)
             desc.children_desc_list = children_desc_list
         except Exception as e:
-            print(e)
+            logger.error(f"llm_function_summary_description error, response:{response} , error info: {e}")
             desc = Description(description=response)
         return desc
 
@@ -293,7 +331,7 @@ class ProjectCodeDescTree:
                 desc = Description.parse_obj(ujson.loads(response))
                 return desc
             except Exception as e:
-                print(f"引起异常的desc_list ： {desc_list}, \n response:{response} \n 异常信息为：{e}")
+                logger.error(f"引起异常的desc_list ： {desc_list}, \n response:{response} \n 异常信息为：{e}")
                 return Description(description=response)
 
     # 对代码文件进行总结, 是代码就输出json，也可能输出总结的字符串
@@ -307,7 +345,7 @@ class ProjectCodeDescTree:
             with open(file_path) as f:
                 return self.llm_code_summary_description(f.read(), file_path)
         except Exception as e:
-            print(e)
+            logger.error(f"llm_summary_file_description error ,  异常信息为：{e}")
 
     def llm_split_multi_query(self, query_text: str) -> list[dict]:
         prompt = PromptTemplate.from_template(MULTI_QUERY_PROMPT_TEMPLATE)
@@ -326,7 +364,7 @@ class ProjectCodeDescTree:
                     })
             return split_question_list
         except Exception as e:
-            traceback.print_exc()
+            logger.error(f"llm_split_multi_query error error info is :{e}")
             return []
 
     def llm_check_need_code(self, query_text) -> bool:
@@ -354,7 +392,7 @@ class ProjectCodeDescTree:
             llm_response = llm_chain.predict(description=description)
             return llm_response
         except Exception as e:
-            traceback.print_exc()
+            logger.error(f"llm_hypothetical_questions error error info is :{e}")
             raise e
 
     # 保存到向量数据库中
@@ -461,10 +499,10 @@ class ProjectCodeDescTree:
 if __name__ == '__main__':
     # infobase_with_docs: 带有docs 进行embedding的
     # infobase_with_docs_without_params : 不带有任何出入参数询问llm ，直接进行总结即可
-    codeDesc = ProjectCodeDescTree(project_path="/Users/zhanbei/IdeaProjects/EvalEx/",
-                                   collection_name="infobase_with_docs")
+    codeDesc = ProjectCodeDescTree(project_path="/Users/zhanbei/IdeaProjects/doop-server",
+                                   collection_name="doop-server")
     try:
-        # desc = codeDesc.constructDescriptionTree("/Users/zhanbei/IdeaProjects/EvalEx")
+        # desc = codeDesc.constructDescriptionTree("/Users/zhanbei/IdeaProjects/doop-server")
         # print(desc.dict())
         # pass
         # result = codeDesc.query_similarity("EvalEx 的主要功能有哪些，按照功能点列出。我可以用EvalEx 做什么？")
@@ -499,57 +537,57 @@ if __name__ == '__main__':
 
         # ISSUES
         issues = [
-            """
-            How to restrict list of operators used in formula evaluation? 
-            Thank you for your library. How to restrict the list of operators before evaluating the formula? I only use the +, -, *, / how to disable for example the unary operators?
-           """,
-            """
-            Structure access with arbitrary key format
-            Hello, really loving this little library.
-            I'm facing the issue where my context is as follows
-            
-            {
-                "element": {
-                    "a prop": 1
-                }
-            }
-            and I wish I could write an expression such as element['a prop'] or element.'a prop'. Is there a way to achieve this?
-            """,
+            #  """
+            #  How to restrict list of operators used in formula evaluation?
+            #  Thank you for your library. How to restrict the list of operators before evaluating the formula? I only use the +, -, *, / how to disable for example the unary operators?
+            # """,
+            #  """
+            #  Structure access with arbitrary key format
+            #  Hello, really loving this little library.
+            #  I'm facing the issue where my context is as follows
+            #
+            #  {
+            #      "element": {
+            #          "a prop": 1
+            #      }
+            #  }
+            #  and I wish I could write an expression such as element['a prop'] or element.'a prop'. Is there a way to achieve this?
+            #  """,
+            #
+            #  """
+            #  Fraction calculation, is that possible?
+            #  Hi,
+            #  I successfully implemented basic features of a calculator.
+            #  Thank you a lot for the useful library!
+            #  I plan to see if I can enhance my calculator with the feature like at https://www.mathpapa.com/fraction-calculator.html
+            #  Basically, the calculator should allow to switch between decimal and fraction mode.
+            #  In fraction mode, every part, which is not an integer will be kept as original or in an optimal result.
+            #  Examples:
+            #  2 / 6 should be 1 / 3
+            #  sqrt(4 / 2) should be sqrt(2)
+            #  2 / 6 + sqrt(4 / 2) should be 1 / 3 + sqrt(2)
+            #  Do you see any possibility for fraction calculation with this library?
+            #  """,
 
-            """
-            Fraction calculation, is that possible?
-            Hi,
-            I successfully implemented basic features of a calculator.
-            Thank you a lot for the useful library!
-            I plan to see if I can enhance my calculator with the feature like at https://www.mathpapa.com/fraction-calculator.html
-            Basically, the calculator should allow to switch between decimal and fraction mode.
-            In fraction mode, every part, which is not an integer will be kept as original or in an optimal result.
-            Examples:
-            2 / 6 should be 1 / 3
-            sqrt(4 / 2) should be sqrt(2)
-            2 / 6 + sqrt(4 / 2) should be 1 / 3 + sqrt(2)
-            Do you see any possibility for fraction calculation with this library?
-            """,
-
-            """
-            Detect whether an Expression is a simple number
-            Question: I was wondering whether there is an easy way to detect with EvalEx whether an expression is a simple number?
-            Let me describe in more details my use-case. I have two input values for expressions which get multiplied in the end.
-            For example:
-            expression1: 12+3
-            expression2: 5-3
-            
-            Hence what I do is to is to concatenate the strings (if valid): (expression1) * (expression2)
-            Note: To be on the safe side I need to add brackets around it. I also show the "resulting" expression to the user. In this case (12+3) * (5-3)
-            This bring me to the actual question. In most of the cases people insert simple numbers like
-            expression1: 8
-            expression2: 9
-            and the results looks like this: (8) * (9)
-            People wonder why these brackets are added since it would be nicer looking to have in this case 8 * 9
-            I noticed there is a isNumber(...) function. Unfortunately it is protected.
-            Is there another way to achieve what I am looking for?
-            Thanks for any advice and your library in the first place!
-            """
+            # """
+            # Detect whether an Expression is a simple number
+            # Question: I was wondering whether there is an easy way to detect with EvalEx whether an expression is a simple number?
+            # Let me describe in more details my use-case. I have two input values for expressions which get multiplied in the end.
+            # For example:
+            # expression1: 12+3
+            # expression2: 5-3
+            #
+            # Hence what I do is to is to concatenate the strings (if valid): (expression1) * (expression2)
+            # Note: To be on the safe side I need to add brackets around it. I also show the "resulting" expression to the user. In this case (12+3) * (5-3)
+            # This bring me to the actual question. In most of the cases people insert simple numbers like
+            # expression1: 8
+            # expression2: 9
+            # and the results looks like this: (8) * (9)
+            # People wonder why these brackets are added since it would be nicer looking to have in this case 8 * 9
+            # I noticed there is a isNumber(...) function. Unfortunately it is protected.
+            # Is there another way to achieve what I am looking for?
+            # Thanks for any advice and your library in the first place!
+            # """
         ]
         for issue in issues:
             result = codeDesc.query_similarity(issue)
@@ -574,3 +612,5 @@ if __name__ == '__main__':
         # print([r.dict() for r in result])
     except Exception as e:
         traceback.print_exc()
+    finally:
+        codeDesc.write_pass_file_list_to_file()

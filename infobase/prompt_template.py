@@ -47,15 +47,12 @@ LLM_FUNCTION_SUMMARY_OUTPUT = '''
     "description": "add(self, a: int, b: int) -> int is to add two integers and return an int type data",
     "input_parameter": "a:int, b:int",
     "return_obj": "int",
-    "possible_exception": ["",""],
+    "possible_exception": ["",""]
 }
 '''
 
 LLM_DIR_SUMMARY_PROMPT_TEMPLATE = '''
-A certain {path_type} contains the following description information. As a intelligent robot, 
-
-Provide a summary description and potential hypothetical questions regarding this description.
-Only three hypothetical questions need to be given
+A certain {path_type} contains the following description information. As a intelligent robot, provide a summary description
 Please output strictly in JSON format
 
 Example:
@@ -70,7 +67,7 @@ please analyze and summarize the {path_type} based on the following known inform
 '''
 DIR_SUMMARY_OUTPUT = """
 {
-	"description": "The program is designed to convert a list of expression tokens into an abstract syntax tree. The class_declaration is responsible for processing various tokens, including structure separators, function opening and closing braces, and array open and close tokens. It also validates function parameters and checks for operator precedence. The program creates operator nodes and pushes them onto the operand stack. It checks if a given token is an operator or not and returns a boolean value.",
+	"description": "The program is designed to convert a list of expression tokens into an abstract syntax tree. The class_declaration is responsible for processing various tokens, including structure separators, function opening and closing braces, and array open and close tokens. It also validates function parameters and checks for operator precedence. The program creates operator nodes and pushes them onto the operand stack. It checks if a given token is an operator or not and returns a boolean value."
 }
 """
 
@@ -97,12 +94,11 @@ As an intelligent robot, please organize known information and answer the follow
 """
 
 MULTI_QUERY_PROMPT_TEMPLATE = """
-Manage intelligent robots as a code repository. 
-Based on the following questions, divide them into three different latitude questions, preferably related to code and functionality, 
-so that you can search for relevant functions and source code in the code repository and answer user questions. 
-The split question can provide a detailed description of the content to be inquired about.
+As an intelligent dialogue robot
+Based on the following questions, divide them into three different questions, preferably related to code and functionality, so that you can search for relevant functions and source code in the code repository and answer user questions.
+question：{question}
 
-{question}
+Simply return the results according to the list
  """
 
 NEED_ORIGIN_CODE_PROMPT_TEMPLATE = """
@@ -110,4 +106,9 @@ Now there is a problem where you can find the corresponding function description
 As an intelligent robot, do you need source code to answer this question:
 {question}
 No need to analyze the process, just answer yes or no
+"""
+
+COMMON_AI_CHAT_PROMPT_TEMPLATE = """
+As an artificial intelligence dialogue robot, answering questions based on user input:
+input:{input}
 """
