@@ -83,7 +83,7 @@ def construct_similar_doc_origin_code(question: dict):
                     "page_content": similar_doc.page_content
                 })
         except Exception as e:
-            logger.error(f"读取源代码异常，异常信息为：{e}")
+            logger.error(f"读取源代码异常{PROJECT_PATH + file_path}，异常信息为：{e}")
         return {"context": similar_content_obj, "query": question.get("question").get("question")}
 
 
@@ -163,7 +163,7 @@ def common_ai_chat_chain() -> Runnable:
 
     chat_prompt = PromptTemplate(template=COMMON_AI_CHAT_PROMPT_TEMPLATE, input_variables=["input"])
 
-    return {"input": RunnablePassthrough} | chat_prompt | llm_model | StrOutputParser()
+    return {"input": RunnablePassthrough()} | chat_prompt | llm_model | StrOutputParser()
 
 
 def get_chain(request_body: dict) -> str:
@@ -181,7 +181,7 @@ def get_chain(request_body: dict) -> str:
             | get_translator_chain()
     )
 
-    if request_body.get("collection_name") is None:
+    if request_body.get("collection_name") is None or request_body.get("collection_name") == "":
         common_chat_chain = (translator_english_chain | common_ai_chat_chain() | translator_chain)
         return common_chat_chain.invoke({"input": request_body.get("query")})
     else:

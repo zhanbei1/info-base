@@ -1,5 +1,3 @@
-
-
 from fastapi import FastAPI
 from langchain.schema.runnable import RunnableLambda
 from langserve import add_routes
@@ -27,5 +25,8 @@ add_routes(
 
 if __name__ == "__main__":
     import uvicorn
+    from dotenv import load_dotenv
 
+    # 加载环境配置文件.env
+    load_dotenv()
     uvicorn.run(app, host=DEFAULT_BIND_HOST, port=PORT)

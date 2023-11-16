@@ -23,7 +23,7 @@ if not os.path.exists(LOG_PATH):
 # 支持文件夹名称或者文件名称正则表达
 IGNORE_PATH = ["*.class", "*.ear", "*.jar", "*.jws", "*.ser", "*.war", ".classpath", ".cosine", ".eclipse", ".git",
                ".gradle", ".idea", ".mvn", ".project", ".settings", ".vscode", "bin", "doc", "build", "logs", "out",
-               "target", ".*", "LICENSE", "test", "*.json", "*.xlsx", "*.xls"]
+               "target", ".*", "LICENSE", "test", "*.json", "*.xlsx", "*.xls", "resource"]
 
 # 不用语言，通过tree-sitter解析出来的语法树之后，哪些是需要保留的类型：
 SUPPORT_LANGUAGE_DEFINITION_TYPE = {
@@ -52,3 +52,4 @@ SIMILARITY_SEARCH_TOP_K = 8
 
 # 项目路径，如果可以应该存入数据库中
 PROJECT_PATH = "/Users/zhanbei/IdeaProjects/doop-server"
+# PROJECT_PATH = "/Users/zhanbei/IdeaProjects/EvalEx/"

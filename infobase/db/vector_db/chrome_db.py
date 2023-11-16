@@ -48,7 +48,6 @@ class ChromaDb:
 
     @classmethod
     def _check_db_collection(cls, collection_name: str) -> Chroma:
-        print("=============> " + str(collection_name))
         if cls.chroma_db_dict.get(collection_name, None) is None:
             cls.chroma_db_dict[collection_name] = Chroma(collection_name=collection_name,
                                                          embedding_function=cls.embedding_model,
