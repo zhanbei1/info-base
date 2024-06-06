@@ -75,9 +75,11 @@ DIR_SUMMARY_OUTPUT = """
 LLM_QUERY_PROMPT_TEMPLATE = '''
 The following information is known : 
 {context}
-As information administrator robot, please answer:
-{query}
 
+As an information administrator robot, please answer this question. 
+Question: {query}
+
+If you are unable to answer based on known information, simply answer 'None' and do not add any other content.
 '''
 
 LLM_LANGUAGE_TRANSLATOR_PROMPT_TEMPLATE = '''
@@ -102,13 +104,23 @@ Simply return the results according to the list
  """
 
 NEED_ORIGIN_CODE_PROMPT_TEMPLATE = """
-Now there is a problem where you can find the corresponding function description based on the problem, but there is no source code for the function.
-As an intelligent robot, do you need source code to answer this question:
-{question}
-No need to analyze the process, just answer yes or no
+As a code repository management robot, please determine if you need source code to answer this question.
+If source code is required, please answer "Yes"; otherwise, answer "No"
+Question: {question}
 """
 
 COMMON_AI_CHAT_PROMPT_TEMPLATE = """
 As an artificial intelligence dialogue robot, answering questions based on user input:
 input:{input}
+"""
+
+UNIT_TEST_PROMPT_TEMPLATE = """
+input:{input}
+"""
+
+QUERY_KEY_WORD_PROMPT_TEMPLATE = """
+For a project's question, please extract keywords from the question so that you can better search for corresponding answers from the vector database. 
+Simply return the keyword content without adding any additional information.
+Question:
+{query}
 """

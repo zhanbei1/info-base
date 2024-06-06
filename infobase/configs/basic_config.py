@@ -3,6 +3,8 @@ import os
 import langchain
 
 # 是否显示详细日志
+import nltk
+
 log_verbose = False
 langchain.verbose = False
 
@@ -13,6 +15,9 @@ LOG_FORMAT = "%(asctime)s - %(filename)s[line:%(lineno)d] - %(levelname)s: %(mes
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 logging.basicConfig(format=LOG_FORMAT)
+
+# nltk 添加路径
+nltk.data.path.append("nltk_data/")
 
 # 日志存储路径
 LOG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logs")
@@ -47,9 +52,14 @@ CODE_TYPE_FILE_SUFFIX_MAPPING = {
 # 向量数据库配置：
 # 向量数据库存储路径
 PERSIST_DIRECTORY = "data/chroma_db"
+# 倒排索引存入的文件路径
+INVERTED_INDEX_FILE_PATH = "data/lexical_inverted_index.pickle"
 # top-k
 SIMILARITY_SEARCH_TOP_K = 8
 
 # 项目路径，如果可以应该存入数据库中
-PROJECT_PATH = "/Users/zhanbei/IdeaProjects/doop-server"
+# PROJECT_PATH = "/Users/zhanbei/IdeaProjects/doop-server"
 # PROJECT_PATH = "/Users/zhanbei/IdeaProjects/EvalEx/"
+PROJECT_PATH = "/Users/zhanbei/IdeaProjects/doop-server"
+
+FILE_THRESHOLD = 100

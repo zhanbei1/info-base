@@ -11,12 +11,11 @@
 """
 import fnmatch
 import os
-import sys
+import pickle
 import traceback
-import uuid
 import re
 from enum import Enum
-from typing import List, Any
+from typing import Any
 
 import ujson
 from langchain.chains import LLMChain
@@ -31,12 +30,17 @@ from langchain.vectorstores.chroma import Chroma
 from pydantic import BaseModel, Field
 from tree_sitter import Language, Parser
 
-from infobase.configs import IGNORE_PATH, logger, CODE_TYPE_FILE_SUFFIX_MAPPING, SUPPORT_LANGUAGE_DEFINITION_TYPE
+from infobase.configs import IGNORE_PATH, logger, CODE_TYPE_FILE_SUFFIX_MAPPING, SUPPORT_LANGUAGE_DEFINITION_TYPE, \
+    INVERTED_INDEX_FILE_PATH
+from infobase.enums import CodeLanguageEnum
+from infobase.lexical_search import prepare_index_from_snippets
+from infobase.model import Snippet, SupportLanguageParser
 from infobase.prompt_template import LLM_WHOLE_FILE_SUMMARY_PROMPT_TEMPLATE, \
     LLM_DIR_SUMMARY_PROMPT_TEMPLATE, LLM_QUERY_PROMPT_TEMPLATE, LLM_LANGUAGE_TRANSLATOR_PROMPT_TEMPLATE, \
     LLM_FUNCTION_SUMMARY_PROMPT_TEMPLATE, LLM_FUNCTION_SUMMARY_OUTPUT, \
     DIR_SUMMARY_OUTPUT, MULTI_QUERY_PROMPT_TEMPLATE, LLM_MULTI_QUERY_PROMPT_TEMPLATE, \
     HYPOTHETICAL_QUESTIONS_PROMPT_TEMPLATE, NEED_ORIGIN_CODE_PROMPT_TEMPLATE
+from infobase.utils.file_utils import naive_chunker
 
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
 
@@ -48,18 +52,6 @@ class PathType(Enum):
     CLASS = "class"
 
 
-class SupportLanguageParser:
-    def __init__(self, type_str: str):
-        self.file_suffix: str = CODE_TYPE_FILE_SUFFIX_MAPPING.get(type_str)
-        self.language_tree_sitter: Language = Language(
-            '/Users/zhanbei/PycharmProjects/infobase/build/local-support-languages.so', type_str)
-        self.parser = Parser()
-        self.parser.set_language(self.language_tree_sitter)
-        self.tree_sitter_type_list: list = SUPPORT_LANGUAGE_DEFINITION_TYPE.get(type_str).get("definition_list", [])
-        self.mini_analysis_type: str = SUPPORT_LANGUAGE_DEFINITION_TYPE.get(type_str).get("mini_analysis_type", None)
-        self.ignore_save_type: list[str] = SUPPORT_LANGUAGE_DEFINITION_TYPE.get(type_str).get("ignore_save_type", [])
-
-
 # LANGCHAIN_TRACING_V2=true
 # LANGCHAIN_ENDPOINT="https://api.smith.langchain.com"
 # LANGCHAIN_API_KEY="ls__500d00851450424e9410eff8edf5cdda"
@@ -68,12 +60,6 @@ os.environ["LANGCHAIN_TRACING_V2"] = "true"
 os.environ["LANGCHAIN_ENDPOINT"] = "https://api.smith.langchain.com"
 os.environ["LANGCHAIN_API_KEY"] = "ls__500d00851450424e9410eff8edf5cdda"
 os.environ["LANGCHAIN_PROJECT"] = "desmond_test"
-
-
-# 支持的语言和文件识别的后缀
-class CodeLanguageEnum(Enum):
-    JAVA = SupportLanguageParser("java")
-    PYTHON = SupportLanguageParser("python")
 
 
 class Description(BaseModel):
@@ -107,9 +93,11 @@ class ProjectCodeDescTree:
         self.chroma_db = Chroma(collection_name="infobase" if collection_name is None else collection_name,
                                 embedding_function=self.embedding_model,
                                 persist_directory="/Users/zhanbei/PycharmProjects/infobase/data/chroma_db")
-        self.common_text_splitter = CharacterTextSplitter.from_tiktoken_encoder(chunk_size=500, chunk_overlap=10)
+        # self.common_text_splitter = CharacterTextSplitter.from_tiktoken_encoder(chunk_size=500, chunk_overlap=10)
         self.passed_path_file = "/Users/zhanbei/PycharmProjects/infobase/data/pass_file_path.txt"
         self.passed_path = self._load_passed_file_list()
+        # 所有文件切片之后
+        self.snippet_list = []
 
     def _load_passed_file_list(self):
         """
@@ -145,6 +133,7 @@ class ProjectCodeDescTree:
                 current_path: str = os.path.join(path, path_name)
                 path_desc = self.constructDescriptionTree(current_path)
                 if path_desc is not None:
+                    path_desc.name = path_name if path_desc.name is None else path_desc.name
                     desc_list.append(path_desc)
             # 根据desc_list 总结本目录主要功能
             if desc_list is None:
@@ -156,6 +145,7 @@ class ProjectCodeDescTree:
                 desc: Description = self.llm_dir_summary_description(desc_list=desc_list, path_type="module")
                 desc.type = PathType.DIR.value
                 desc.path = path.replace(self.project_path, "")
+                desc.name = path.split("/")[-1] if desc.name is None else desc.name
                 # desc.children_desc_list = desc_list
                 self.insert_to_vector_db(desc)
                 return desc
@@ -168,6 +158,9 @@ class ProjectCodeDescTree:
                 if path.endswith(".py"):
                     file_desc = self.split_code_file_summary_desc(path, CodeLanguageEnum.PYTHON)
                     if file_desc is not None:
+                        file_desc.type = PathType.FILE.value
+                        file_desc.name = path.split("/")[-1] if file_desc.name is None else file_desc.name
+                        file_desc.path = path.replace(self.project_path, "")
                         parser: SupportLanguageParser = CodeLanguageEnum.PYTHON.value
                         self.insert_to_vector_db(file_desc, parser.ignore_save_type)
                         return file_desc
@@ -176,6 +169,8 @@ class ProjectCodeDescTree:
                 elif path.endswith(".java"):
                     file_desc = self.split_code_file_summary_desc(path, CodeLanguageEnum.JAVA)
                     if file_desc is not None:
+                        file_desc.name = path.split("/")[-1] if file_desc.name is None else file_desc.name
+                        file_desc.type = PathType.FILE.value
                         parser: SupportLanguageParser = CodeLanguageEnum.JAVA.value
                         self.insert_to_vector_db(file_desc, parser.ignore_save_type)
                         return file_desc
@@ -184,10 +179,22 @@ class ProjectCodeDescTree:
                 else:
                     with open(path) as f:
                         # 如果认为是普通文本，直接文本切分，写入向量数据库
-                        texts: List[str] = self.common_text_splitter.split_text(f.read())
-                        for text in texts:
+                        # 如果认为是普通文本，直接文本切分，写入向量数据库
+                        line_count = 50
+                        overlap = 10
+                        chunks = naive_chunker(f.read(), line_count, overlap)
+                        snippets = []
+                        for idx, chunk in enumerate(chunks):
+                            new_snippet = Snippet(
+                                content=chunk,
+                                start=idx * (line_count - overlap),
+                                end=(idx + 1) * (line_count - overlap),
+                                file_path=path,
+                            )
+                            snippets.append(new_snippet)
                             desc = Description(type=PathType.FILE.value, path=path.replace(self.project_path, ""),
-                                               description=text)
+                                               description=chunk, code_byte_range=[new_snippet.start, new_snippet.end])
+                            desc.name = path.split("/")[-1] if desc.name is None else desc.name
                             self.insert_to_vector_db(desc)
                         return None
             except Exception as e:
@@ -207,9 +214,12 @@ class ProjectCodeDescTree:
             if len(context) < 7000:
                 file_desc: Description = self.llm_summary_file_description(file_path)
                 file_desc.code_byte_range = [0, len(context)]
+                file_desc.path = file_path.replace(self.project_path, "")
+                self.snippet_list.append(Snippet(content=context, start=0, end=len(context),
+                                                 file_path=file_path.replace(self.project_path, "")
+                                                 ))
             else:
                 file_desc = self._code_splitter_summary(file_path, code_type)
-            file_desc.type = PathType.FILE.value
             return file_desc
 
     def _code_splitter_summary(self, file_path: str, code_type: CodeLanguageEnum) -> Description:
@@ -232,6 +242,7 @@ class ProjectCodeDescTree:
         :return: 返回这个节点的Description 信息
         """
         new_chunks_desc = []
+        desc = None
         # 类型定义，没有超长，直接大语言模型分析
         # 直接洗这几个模块，至于其他参数啥的，不处理
         if node.type in code_parser.tree_sitter_type_list:
@@ -256,6 +267,14 @@ class ProjectCodeDescTree:
             desc.code_byte_range = [node.start_byte, node.end_byte]
             desc.type = node.type
             desc.path = file_path.replace(self.project_path, "")
+
+            new_snippet = Snippet(
+                content=node.text,
+                start=node.start_byte,
+                end=node.end_byte,
+                file_path=desc.path
+            )
+            self.snippet_list.append(new_snippet)
             return desc
 
     def llm_code_summary_description(self, class_code_text: str, file_path: str = None) -> Description:
@@ -413,14 +432,16 @@ class ProjectCodeDescTree:
             desc.children_desc_list = None
         docs_list = []
         id_key = "doc_id"
-        id = str(uuid.uuid4())
+        id = f"{desc.path}"
 
         metadata = {id_key: id, "metadata": {"type": desc.type, "path": desc.path}}
         if desc.code_byte_range:
+            id = f"{desc.path}:{str(desc.code_byte_range[0])}:{str(desc.code_byte_range[1])}"
             metadata["metadata"]["code_byte_range"] = desc.code_byte_range
         metadata["metadata"] = ujson.dumps(metadata["metadata"])
         page_content = ujson.dumps({
             "name": desc.name,
+            "path": desc.path,
             "description": desc.description,
         })
         # 假设性问题回答
@@ -476,10 +497,11 @@ class ProjectCodeDescTree:
 
             chain = LLMChain(llm=self.llm35, prompt=prompt_template)
             response = chain.predict(context=similar_content_obj, query=query.get("question"))
-            answer_list.append({
-                "Question": query.get("question"),
+            answer_list.append("""
+                "Question": query.get("question")
                 "Answer": response
-            })
+                \n\n
+                """)
 
         prompt_template = PromptTemplate(template=LLM_MULTI_QUERY_PROMPT_TEMPLATE,
                                          input_variables=["multi_query_answer", "question"])
@@ -495,15 +517,23 @@ class ProjectCodeDescTree:
         response = chain.predict(language=language, content=context)
         return response
 
+    def save_inverted_index(self):
+        index = prepare_index_from_snippets(self.snippet_list, len_repo_cache_dir=len(self.project_path) + 1)
+        with open(INVERTED_INDEX_FILE_PATH, "wb") as f:
+            pickle.dump(index, f)
+
 
 if __name__ == '__main__':
     # infobase_with_docs: 带有docs 进行embedding的
     # infobase_with_docs_without_params : 不带有任何出入参数询问llm ，直接进行总结即可
+    # 带有倒排索引的向量库：doop-server-with-inverted-index
+    #
     codeDesc = ProjectCodeDescTree(project_path="/Users/zhanbei/IdeaProjects/doop-server",
-                                   collection_name="doop-server")
+                                   collection_name="doop-server-with-inverted-index")
     try:
-        # desc = codeDesc.constructDescriptionTree("/Users/zhanbei/IdeaProjects/doop-server")
-        # print(desc.dict())
+        desc = codeDesc.constructDescriptionTree("/Users/zhanbei/IdeaProjects/doop-server")
+        codeDesc.save_inverted_index()
+        print(desc)
         # pass
         # result = codeDesc.query_similarity("EvalEx 的主要功能有哪些，按照功能点列出。我可以用EvalEx 做什么？")
         # translator_text = codeDesc.translator_text_language(result, "Chinese")
@@ -536,81 +566,69 @@ if __name__ == '__main__':
         # print("=" * 20)
 
         # ISSUES
-        issues = [
-            #  """
-            #  How to restrict list of operators used in formula evaluation?
-            #  Thank you for your library. How to restrict the list of operators before evaluating the formula? I only use the +, -, *, / how to disable for example the unary operators?
-            # """,
-            #  """
-            #  Structure access with arbitrary key format
-            #  Hello, really loving this little library.
-            #  I'm facing the issue where my context is as follows
-            #
-            #  {
-            #      "element": {
-            #          "a prop": 1
-            #      }
-            #  }
-            #  and I wish I could write an expression such as element['a prop'] or element.'a prop'. Is there a way to achieve this?
-            #  """,
-            #
-            #  """
-            #  Fraction calculation, is that possible?
-            #  Hi,
-            #  I successfully implemented basic features of a calculator.
-            #  Thank you a lot for the useful library!
-            #  I plan to see if I can enhance my calculator with the feature like at https://www.mathpapa.com/fraction-calculator.html
-            #  Basically, the calculator should allow to switch between decimal and fraction mode.
-            #  In fraction mode, every part, which is not an integer will be kept as original or in an optimal result.
-            #  Examples:
-            #  2 / 6 should be 1 / 3
-            #  sqrt(4 / 2) should be sqrt(2)
-            #  2 / 6 + sqrt(4 / 2) should be 1 / 3 + sqrt(2)
-            #  Do you see any possibility for fraction calculation with this library?
-            #  """,
+        # issues = [
+        #  """
+        #  How to restrict list of operators used in formula evaluation?
+        #  Thank you for your library. How to restrict the list of operators before evaluating the formula? I only use the +, -, *, / how to disable for example the unary operators?
+        # """,
+        #  """
+        #  Structure access with arbitrary key format
+        #  Hello, really loving this little library.
+        #  I'm facing the issue where my context is as follows
+        #
+        #  {
+        #      "element": {
+        #          "a prop": 1
+        #      }
+        #  }
+        #  and I wish I could write an expression such as element['a prop'] or element.'a prop'. Is there a way to achieve this?
+        #  """,
+        #
+        #  """
+        #  Fraction calculation, is that possible?
+        #  Hi,
+        #  I successfully implemented basic features of a calculator.
+        #  Thank you a lot for the useful library!
+        #  I plan to see if I can enhance my calculator with the feature like at https://www.mathpapa.com/fraction-calculator.html
+        #  Basically, the calculator should allow to switch between decimal and fraction mode.
+        #  In fraction mode, every part, which is not an integer will be kept as original or in an optimal result.
+        #  Examples:
+        #  2 / 6 should be 1 / 3
+        #  sqrt(4 / 2) should be sqrt(2)
+        #  2 / 6 + sqrt(4 / 2) should be 1 / 3 + sqrt(2)
+        #  Do you see any possibility for fraction calculation with this library?
+        #  """,
 
-            # """
-            # Detect whether an Expression is a simple number
-            # Question: I was wondering whether there is an easy way to detect with EvalEx whether an expression is a simple number?
-            # Let me describe in more details my use-case. I have two input values for expressions which get multiplied in the end.
-            # For example:
-            # expression1: 12+3
-            # expression2: 5-3
-            #
-            # Hence what I do is to is to concatenate the strings (if valid): (expression1) * (expression2)
-            # Note: To be on the safe side I need to add brackets around it. I also show the "resulting" expression to the user. In this case (12+3) * (5-3)
-            # This bring me to the actual question. In most of the cases people insert simple numbers like
-            # expression1: 8
-            # expression2: 9
-            # and the results looks like this: (8) * (9)
-            # People wonder why these brackets are added since it would be nicer looking to have in this case 8 * 9
-            # I noticed there is a isNumber(...) function. Unfortunately it is protected.
-            # Is there another way to achieve what I am looking for?
-            # Thanks for any advice and your library in the first place!
-            # """
-        ]
-        for issue in issues:
-            result = codeDesc.query_similarity(issue)
-            translator_text = codeDesc.translator_text_language(result, "Chinese")
-            logger.info(translator_text)
-            logger.info("=" * 20)
+        # """
+        # Detect whether an Expression is a simple number
+        # Question: I was wondering whether there is an easy way to detect with EvalEx whether an expression is a simple number?
+        # Let me describe in more details my use-case. I have two input values for expressions which get multiplied in the end.
+        # For example:
+        # expression1: 12+3
+        # expression2: 5-3
+        #
+        # Hence what I do is to is to concatenate the strings (if valid): (expression1) * (expression2)
+        # Note: To be on the safe side I need to add brackets around it. I also show the "resulting" expression to the user. In this case (12+3) * (5-3)
+        # This bring me to the actual question. In most of the cases people insert simple numbers like
+        # expression1: 8
+        # expression2: 9
+        # and the results looks like this: (8) * (9)
+        # People wonder why these brackets are added since it would be nicer looking to have in this case 8 * 9
+        # I noticed there is a isNumber(...) function. Unfortunately it is protected.
+        # Is there another way to achieve what I am looking for?
+        # Thanks for any advice and your library in the first place!
+        # """
+        # ]
+        # for issue in issues:
+        #     result = codeDesc.query_similarity(issue)
+        #     translator_text = codeDesc.translator_text_language(result, "Chinese")
+        #     logger.info(translator_text)
+        #     logger.info("=" * 20)
 
         # desc = codeDesc.constructDescriptionTree("/Users/zhanbei/IdeaProjects/EvalEx/src/main/java/com/ezylang/evalex/operators/booleans")
         # print(desc.dict())
 
-        # embedding_model = HuggingFaceEmbeddings(
-        #     model_name="/Users/zhanbei/PycharmProjects/infobase/models/moka-ai/m3e-small",
-        #     model_kwargs={'device': 'cpu'})
-        # chroma_db = Chroma(collection_name="infobase_embedding_with_multi_vector",
-        #                    embedding_function=embedding_model,
-        #                    persist_directory="/Users/zhanbei/PycharmProjects/infobase/data/chroma_db")
-        # result: list[Document] = chroma_db.similarity_search("InfixNotEqualsOperator.java", k=20)
-        # print([r.dict() for r in result])
-        #
-        # result_score: list[tuple[Document, float]] = chroma_db.similarity_search_with_score("Evaluation of asin(1.5) will throw NumberFormatException which is a bit misleading", k=10)
-        #
-        # print([r.dict() for r in result])
     except Exception as e:
         traceback.print_exc()
-    finally:
-        codeDesc.write_pass_file_list_to_file()
+    # finally:
+    # codeDesc.write_pass_file_list_to_file()

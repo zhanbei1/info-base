@@ -1,10 +1,22 @@
+import os
+
 from fastapi import FastAPI
 from langchain.schema.runnable import RunnableLambda
 from langserve import add_routes
+from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 
 from infobase.chain import get_chain
 from infobase.configs import DEFAULT_BIND_HOST, PORT
 from infobase.model import ChatRequestInput
+from traceloop.sdk import Traceloop
+
+Traceloop.init(app_name="desmond_test_traceloop",
+               exporter=OTLPSpanExporter(endpoint="http://localhost:32167/api/v1/insert/trace-otlp",
+                                         headers={"apikey": "2b326a3b-6a45-4081-a6c4-7b3d0b875c79"}),
+               metrics_exporter=OTLPMetricExporter(endpoint="http://localhost:32167/api/v1/insert/metric-otlp",
+                                                   headers={"apikey": "2b326a3b-6a45-4081-a6c4-7b3d0b875c79"})
+               )
 
 app = FastAPI(
     title="InfoBase",
